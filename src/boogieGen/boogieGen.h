@@ -68,6 +68,7 @@ namespace boogieGen{
         void funcGen(Function *);
         void mainGen(void);
         int extractNum(std::string, std::string);
+        void programSlice(Module &);
     };
     char boogieGen::ID = 0;
     static RegisterPass<boogieGen> X("boogieGen", "Boogie program generator from C code");

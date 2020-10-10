@@ -15,6 +15,15 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/DataLayout.h"
 #include "boogieGen.h"
+#include "Slice.h"
+#include "CFSlice.h"
+#include "ISlice.h"
+#include "LoadRunaheadAnalysis.h"
+#include "MemSlice.h"
+#include "SliceArrayRefs.h"
+#include "SliceCriterion.h"
+#include "SliceHelpers.h"
+#include "SliceMem.h"
 
 #include <math.h>
 #include <regex>
@@ -36,6 +45,7 @@ namespace boogieGen{
     init(M);
 
     // 1. array partition analysis
+    programSlice(M);
 
     // 2. extract memory accesses
     memoryPatternGen(M);
@@ -51,6 +61,41 @@ namespace boogieGen{
     bpl.close();
     errs() << "Boogie generated successfully.\n";    
     return false;
+  }
+
+  void boogieGen::programSlice(Module &M){
+    for (auto &F: M) {
+      if (F.size() != 0 && strstr(((std::string) F.getName()).c_str(), "ssdm") == NULL){ // ignore all empty functions
+        Function *f = &F;
+        Slice *threadFuncSlice = new Slice(f);
+        for (auto BB = f->begin(); BB != f->end(); ++BB) {  // Basic block level
+          for (auto I = BB->begin(); I != BB->end(); ++I) {   // Instruction level
+            if (isa<LoadInst>(I) || isa<StoreInst>(I))
+              threadFuncSlice->addCriterion(dyn_cast<Value>(I));
+          }
+        }
+        ISlice *inversedThreadFuncSlice = new ISlice(f);
+        inversedThreadFuncSlice->inverse(threadFuncSlice);
+        removeSlice((Function *)f, inversedThreadFuncSlice);
+      }
+    }
+  }
+
+  void boogieGen::memoryPatternGen(Module &M){
+    phiAnalysis(M);
+    for (auto &F: M) {
+      if (F.size() != 0 && strstr(((std::string) F.getName()).c_str(), "ssdm") == NULL){ // ignore all empty functions
+        bpl << "\n// For function: " << static_cast<std::string>((F.getName()));
+        Function *f = &F;
+        printFuncPrototype(f);
+        printVarDeclarations(f);
+        bpl << "\n";
+        funcGen(f);
+        bpl << "}\n";   // indicate end of function
+      }
+      else
+        errs() << "Function: " << static_cast<std::string>((F.getName())) << "is empty so ignored in Boogie\n";
+    }
   }
 
   void boogieGen::mainGen(void){
@@ -168,23 +213,6 @@ namespace boogieGen{
     }
     bpl << "{\n\t\tlatency := bv64neg(1bv64);\n\t}\n\treturn;\n}\n"; 
 
-  }
-
-  void boogieGen::memoryPatternGen(Module &M){
-    phiAnalysis(M);
-    for (auto &F: M) {
-      if (F.size() != 0 && strstr(((std::string) F.getName()).c_str(), "ssdm") == NULL){ // ignore all empty functions
-        bpl << "\n// For function: " << static_cast<std::string>((F.getName()));
-        Function *f = &F;
-        printFuncPrototype(f);
-        printVarDeclarations(f);
-        bpl << "\n";
-        funcGen(f);
-        bpl << "}\n";   // indicate end of function
-      }
-      else
-        errs() << "Function: " << static_cast<std::string>((F.getName())) << "is empty so ignored in Boogie\n";
-    }
   }
 
   void boogieGen::phiAnalysis(Module &M)
