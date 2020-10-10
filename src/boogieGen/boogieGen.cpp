@@ -502,8 +502,11 @@ namespace boogieGen{
           b++;
           return (std::to_string(b)+"bv64"); //+std::to_string(bits));
         }
-        else
-            return(instrResName+"bv64"); //+std::to_string(bits));
+        else if (instrResName == "false")
+          return("0bv64"); //+std::to_string(bits));
+        else if (instrResName == "true")
+          return("1bv64"); //+std::to_string(bits)); 
+          return(instrResName+"bv64"); //+std::to_string(bits));
     }
     else if (isa<ConstantFP>(I)){
       std::string type = "";
@@ -866,17 +869,6 @@ namespace boogieGen{
           }            
         }   // end of insert loop invariants in the beginning
         
-        for (auto it = invariances.begin(); it != invariances.end(); ++it){
-          invariance *in = *it;
-          llvm::PHINode *inst = in->instr;
-          for (unsigned int t = 0; t < inst->getNumIncomingValues(); ++t){
-            if (!isa<ConstantInt>(inst->getIncomingValue(t)) && inst->getIncomingBlock(t) == &*BB){
-              bpl << "\tassert(" << in->invar << ");\n";
-              bpl << "\treturn;\n\tassume false;\n";
-            }
-          }
-
-        }
         std::string callName;
         int search;
         memoryNode *mn;
@@ -890,6 +882,17 @@ namespace boogieGen{
                     break;
                     
                 case Instruction::Br:     // br
+                    // loop invariant at exit
+                    for (auto it = invariances.begin(); it != invariances.end(); ++it){
+                      invariance *in = *it;
+                      llvm::PHINode *inst = in->instr;
+                      for (unsigned int t = 0; t < inst->getNumIncomingValues(); ++t){
+                        if (!isa<ConstantInt>(inst->getIncomingValue(t)) && inst->getIncomingBlock(t) == &*BB){
+                          bpl << "\tassert(" << in->invar << ");\n";
+                          bpl << "\treturn;\n\tassume false;\n";
+                        }
+                      }
+                    }
                     // do phi resolution here
                     for (auto it = phis.begin(); it != phis.end(); ++it)
                     {

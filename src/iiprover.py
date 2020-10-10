@@ -11,6 +11,11 @@ import helper as helper
 top = sys.argv[1]
 II_MAX = int(sys.argv[2]) if len(sys.argv) > 2 else 100
 II_MIN = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+mode = sys.argv[4] if len(sys.argv) > 4 else "lite"
+
+if top == "-":
+	helper.error("Please specify the name of the benchmark. e.g.\nmake name=vecTrans")
+	assert(0)
 
 print(" ==================================================== ")
 print(" II prover for Vitis HLS v1.0 ")
@@ -63,7 +68,15 @@ for f in fL:
 			ftemp.write(buff)
 			ftemp.close()
 
+def iiProverExit():
+	os.system("rm -f "+top+"/"+iterFileName)
+	os.system("rm -f "+top+"/iiprover.tcl")
+	os.system("rm -f "+top+"/iiprover_.tcl")
+	os.system("rm -f "+top+"/output.bpl")
+	os.system("rm -f boogie.log")
+
 tcl = open(top+"/iiprover.tcl", "w")
+tcl_ = open(top+"/iiprover_.tcl", "w")
 buff = ""
 buff = buff + "open_project -reset proj\nset_top "+top+"\nadd_files {"
 for h in hL:
@@ -79,8 +92,14 @@ for f in fL:
 buff = buff + "}\n"
 buff = buff + "open_solution \"soluion1\"\nset_part {xc7z020clg484-1}\ncreate_clock -period 10 -name default\n"
 tcl.write(buff)
-tcl.write("csynth_design\nexit\n")
+if mode == "lite":
+	tcl.write("csynth_design\nexit\n")
+else:
+	tcl.write("config_bind -effort high\ncsynth_design\nexit\n")
 tcl.close()
+tcl_.write(buff)
+tcl_.write("config_bind -effort high\ncsynth_design\nexit\n")
+tcl_.close()
 print("preprocess successfully.")
 
 # now do preprocess
@@ -104,9 +123,15 @@ while ii < II_MAX:
 	os.system("cd "+top+";"+vhls+" iiprover.tcl > /dev/null")
 	os.system(opt+" -load ../src/_build/boogieGen/libboogieGen.so -boogieGen "+top+"/proj/soluion1/.autopilot/db/a.o.3.bc -S > /dev/null")
 	os.system("boogie "+top+"/output.bpl > boogie.log")
-	with open("boogie.log") as ftemp:
-		if "This assertion might not hold" not in ftemp.read():
-			done = True
+	buff = ""
+	ftemp = open("boogie.log")
+	for line in ftemp:
+		buff = buff + line
+	ftemp.close()
+	if "This assertion might not hold" not in buff and "Error" not in buff:
+		done = True
+	elif "Error" in buff and "This assertion might not hold" not in buff:
+		helper.error("Syntax error found in Boogie output")
 	if done:
 		os.system("echo \"Proof succeeded.\"")
 		break;
@@ -117,12 +142,28 @@ if ii == II_MAX:
 	print("Cannot find II smaller than "+str(II_MAX))
 else:
 	print("Found the optimal II = "+str(ii))
-os.system("rm -f "+top+"/"+iterFileName)
-os.system("rm -f "+top+"/iiprover.tcl")
-os.system("rm -f boogie.log")
 
+if mode == "lite":
+	os.system("echo \"Prove the schedule with resource sharing...\"")
+	os.system("cd "+top+";"+vhls+" iiprover.tcl_ > /dev/null")
+	os.system(opt+" -load ../src/_build/boogieGen/libboogieGen.so -boogieGen "+top+"/proj/soluion1/.autopilot/db/a.o.3.bc -S > /dev/null")
+	os.system("boogie "+top+"/output.bpl > boogie.log")
+	done = False
+	buff = ""
+	ftemp = open("boogie.log")
+	for line in ftemp:
+		buff = buff + line
+	ftemp.close()
+	if "This assertion might not hold" not in buff and "Error" not in buff:
+		done = True
+	elif "Error" in buff and "This assertion might not hold" not in buff:
+		helper.error("Syntax error found in Boogie output")
+		
+if done == False and mode == "lite":
+	helper.error("Mismatched schedule with resource sharing.")
+	assert(0)
 
-
+iiProverExit()
 
 
 
