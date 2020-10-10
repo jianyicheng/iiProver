@@ -28,6 +28,8 @@ std::string output_dir = "./";
 namespace boogieGen{
 
   bool boogieGen::runOnModule(Module &M) {
+
+    pplLoop = NULL;
     
     // JC TODO: features not supported: function calls, 2D arrays, global arrays(TODO)
     // 0. init array accesses
@@ -49,7 +51,7 @@ namespace boogieGen{
     // interpretToBoogie(M);
     
     bpl.close();
-    errs() << "Boogie generated successfully.\n";    
+    errs() << "Boogie generated successfully. II = "<<II<<"\n";    
     return false;
   }
 
@@ -69,8 +71,25 @@ namespace boogieGen{
 
         for (auto BB = f->begin(); BB != f->end(); ++BB) {  // Basic block level
           for (auto I = BB->begin(); I != BB->end(); ++I) {   // Instruction level
-            if (KLoop->isLoopHeader(&*BB))
+            if (KLoop->isLoopHeader(&*BB)){
               depInstr.push_back(&*I);
+              if (isa<BranchInst>(I)){
+                std::string pplIIBuff;
+                raw_string_ostream string_stream(pplIIBuff);
+                dyn_cast<Metadata>(dyn_cast<MDNode>(I->getMetadata("llvm.loop")->getOperand(3))->getOperand(1))->printAsOperand(string_stream);
+                int pplII = std::stoi(pplIIBuff.substr(pplIIBuff.find(" ")+1));
+                if (pplII != 0){
+                  if (pplLoop == NULL){
+                    pplLoop = KLoop->getLoopFor(&*BB);
+                    II = pplII;
+                  }
+                  else{
+                    errs() << "Multiple loops set to pipelined. It will be supported in the future.\n";
+                    assert(0);
+                  }
+                }
+              }
+            }
             else if (isa<LoadInst>(I) || isa<StoreInst>(I))
               depInstr.push_back(&*I);
           }
@@ -99,11 +118,17 @@ namespace boogieGen{
         }
 
         for (auto &r: revInstr){
+#ifdef IIPROVER_DEBUG
           errs() << "Removing " << *r << "\n";
+#endif
           r->replaceAllUsesWith(UndefValue::get(dyn_cast<Value>(r)->getType()));
           r->eraseFromParent();
         }
       }
+    }
+    if (II == -2){
+      errs() << "Error: No loop is to be pipelined.\n";
+      assert(0);
     }
   }
 
@@ -119,8 +144,10 @@ namespace boogieGen{
         funcGen(f);
         bpl << "}\n";   // indicate end of function
       }
+#ifdef IIPROVER_DEBUG
       else
         errs() << "Function: " << static_cast<std::string>((F.getName())) << "is empty so ignored in Boogie\n";
+#endif
     }
   }
 
@@ -195,7 +222,13 @@ namespace boogieGen{
           while (isdigit(line[tempIdx]))
             tempIdx++;
           std::string s = line.substr(line.find("(II) = ")+7, tempIdx-line.find("(II) = ")-7);
-          II = std::stoi(s);
+          int reportII = std::stoi(s);
+          if (II != -1 && reportII != II){
+            errs() << "Mismatched IIs for the given loop.\n";
+            assert(0);
+          }
+          else
+            II = reportII;
         }
 
         if (line.find("<SV = ") != std::string::npos)
@@ -223,8 +256,9 @@ namespace boogieGen{
     }
     else
       errs() << "Schedule not found.\n";
+#ifdef IIPROVER_DEBUG
     errs() << "Found total "<< st <<" states.\n";
-
+#endif
     bpl << "procedure {:inline 1} getOffset(label: bv64) returns (offset:bv64){\n\t";
     for (auto i = accesses.begin(); i != accesses.end(); ++i){
       memoryNode *mn = *i;
@@ -260,7 +294,9 @@ namespace boogieGen{
             } 
           }
       }
+#ifdef IIPROVER_DEBUG
       errs() << "Found " << phis.size()/2 << " phi nodes.\n";
+#endif
   }
 
   void boogieGen::printFuncPrototype(Function *F){
@@ -297,9 +333,6 @@ namespace boogieGen{
 
   void boogieGen::init(Module &M){
     std::string topName = M.getName().substr(0, M.getName().find("/"));
-    errs() << "=================================\n";
-    errs() << "         II Prover: "+topName+"\n";
-    errs() << "=================================\n";
     bpl.open (topName+"/output.bpl", std::fstream::out);
     for (auto& F: M){
       std::string name = demangle(((std::string) F.getName()).c_str());
@@ -969,53 +1002,57 @@ namespace boogieGen{
                     // JC: add your if(*) here
                     bpl << "//\t" << printNameInBoogie(&*I) << " := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(0))->getOperand(0)) << "[" << printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(0))->getOperand(1)) << "];\n";
                     bpl << "\t havoc " << printNameInBoogie(&*I) << ";\n"; 
-                    mn = new memoryNode;
-                    mn->load = true;
-                    mn->instr = &*I;
-                    mn->label = accesses.size();
-                    accesses.push_back(mn);
-                    for (auto k = invariances.begin(); k != invariances.end(); k++){
-                      invariance *in = *k;
-                      if (in->loop == KLoop->getLoopFor(I->getParent()))
-                        loopiter = in->instr;
+                    if (pplLoop->contains(&*BB)){
+                      mn = new memoryNode;
+                      mn->load = true;
+                      mn->instr = &*I;
+                      mn->label = accesses.size();
+                      accesses.push_back(mn);
+                      for (auto k = invariances.begin(); k != invariances.end(); k++){
+                        invariance *in = *k;
+                        if (in->loop == KLoop->getLoopFor(I->getParent()))
+                          loopiter = in->instr;
+                      }
+                      search = -1;
+                      for (auto k = arrays.begin(); k != arrays.end(); k++){
+                        Value *an = *k;
+                        if ((Value *)(dyn_cast<Instruction>(I->getOperand(0))->getOperand(0)) == an)
+                          search = k-arrays.begin();
+                      }
+                      if (search == -1){
+                        search = arrays.size();
+                        arrays.push_back((Value *)(dyn_cast<Instruction>(I->getOperand(0))->getOperand(0)));
+                      }
+                      bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(0))->getOperand(2)) <<";\n\t\titeration := " << printNameInBoogie(loopiter) << ";\n\t\tload := true;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
                     }
-                    search = -1;
-                    for (auto k = arrays.begin(); k != arrays.end(); k++){
-                      Value *an = *k;
-                      if ((Value *)(dyn_cast<Instruction>(I->getOperand(0))->getOperand(0)) == an)
-                        search = k-arrays.begin();
-                    }
-                    if (search == -1){
-                      search = arrays.size();
-                      arrays.push_back((Value *)(dyn_cast<Instruction>(I->getOperand(0))->getOperand(0)));
-                    }
-                    bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(0))->getOperand(2)) <<";\n\t\titeration := " << printNameInBoogie(loopiter) << ";\n\t\tload := true;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
                     break;
                     
                 case Instruction::Store:    // store
                     // JC: add your if(*) here
                     bpl << "//\t" << printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(0)) << "[" << printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(2)) << "] := "<< printNameInBoogie((Value *)I->getOperand(0)) << ";\n";
-                    mn = new memoryNode;
-                    mn->load = false;
-                    mn->instr = &*I;
-                    mn->label = accesses.size();
-                    accesses.push_back(mn);
-                    for (auto k = invariances.begin(); k != invariances.end(); k++){
-                      invariance *in = *k;
-                      if (in->loop == KLoop->getLoopFor(I->getParent()))
-                        loopiter = in->instr;
+                    if (pplLoop->contains(&*BB)){
+                      mn = new memoryNode;
+                      mn->load = false;
+                      mn->instr = &*I;
+                      mn->label = accesses.size();
+                      accesses.push_back(mn);
+                      for (auto k = invariances.begin(); k != invariances.end(); k++){
+                        invariance *in = *k;
+                        if (in->loop == KLoop->getLoopFor(I->getParent()))
+                          loopiter = in->instr;
+                      }
+                      search = -1;
+                      for (auto k = arrays.begin(); k != arrays.end(); k++){
+                        Value *an = *k;
+                        if ((Value *)(dyn_cast<Instruction>(I->getOperand(1))->getOperand(0)) == an)
+                          search = k - arrays.begin();
+                      }
+                      if (search == -1){
+                        search = arrays.size();
+                        arrays.push_back((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(0));
+                      }
+                      bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(2)) <<";\n\t\titeration := " << printNameInBoogie(loopiter) << ";\n\t\tload := false;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
                     }
-                    search = -1;
-                    for (auto k = arrays.begin(); k != arrays.end(); k++){
-                      Value *an = *k;
-                      if ((Value *)(dyn_cast<Instruction>(I->getOperand(1))->getOperand(0)) == an)
-                        search = k - arrays.begin();
-                    }
-                    if (search == -1){
-                      search = arrays.size();
-                      arrays.push_back((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(0));
-                    }
-                    bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(2)) <<";\n\t\titeration := " << printNameInBoogie(loopiter) << ";\n\t\tload := false;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
                     break;
                 case Instruction::GetElementPtr:     // getelementptr                               // this can be ignored
                     break;

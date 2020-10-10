@@ -45,8 +45,9 @@ namespace boogieGen{
             int latency;
         };
         std::fstream bpl;   // outout Boogie program
+        Loop *pplLoop = NULL;
         Function *top = NULL;
-        int II = -1;
+        int II = -2;
         std::vector<Value *> arrays;
         std::vector<memoryNode *> accesses;
         std::vector<phiNode *> phis;

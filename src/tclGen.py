@@ -29,7 +29,7 @@ for line in buff:
 		opt = helper.findPath(line, buff).replace("\n","")
 
 hL = glob.glob(top+'/src/*.h*')
-fL = glob.glob(top+'/src/*.cpp')
+fL = glob.glob(top+'/src/*.c*')
 
 syn = open(top+"/syn.tcl", "w")
 cosim = open(top+"/cosim.tcl", "w")
