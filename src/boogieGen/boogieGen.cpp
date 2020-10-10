@@ -15,22 +15,11 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/DataLayout.h"
 #include "boogieGen.h"
-#include "Slice.h"
-#include "CFSlice.h"
-#include "ISlice.h"
-#include "LoadRunaheadAnalysis.h"
-#include "MemSlice.h"
-#include "SliceArrayRefs.h"
-#include "SliceCriterion.h"
-#include "SliceHelpers.h"
-#include "SliceMem.h"
 
 #include <math.h>
 #include <regex>
 #include <string>
 #include <fstream>
-
-// long long int INT_MAX = 9223372036854775807;
 
 using namespace llvm;
 
@@ -45,6 +34,7 @@ namespace boogieGen{
     init(M);
 
     // 1. array partition analysis
+    // programSlice(M);  
     programSlice(M);
 
     // 2. extract memory accesses
@@ -64,19 +54,55 @@ namespace boogieGen{
   }
 
   void boogieGen::programSlice(Module &M){
+    std::vector<Instruction *> depInstr;
+    std::vector<Instruction *> revInstr;
+
     for (auto &F: M) {
       if (F.size() != 0 && strstr(((std::string) F.getName()).c_str(), "ssdm") == NULL){ // ignore all empty functions
         Function *f = &F;
-        Slice *threadFuncSlice = new Slice(f);
+        llvm::DominatorTree* DT = new llvm::DominatorTree();
+        DT->recalculate(*f);
+        //generate the LoopInfoBase for the current function
+        llvm::LoopInfoBase<llvm::BasicBlock, llvm::Loop>* KLoop = new llvm::LoopInfoBase<llvm::BasicBlock, llvm::Loop>();
+        KLoop->releaseMemory();
+        KLoop->analyze(*DT);
+
         for (auto BB = f->begin(); BB != f->end(); ++BB) {  // Basic block level
           for (auto I = BB->begin(); I != BB->end(); ++I) {   // Instruction level
-            if (isa<LoadInst>(I) || isa<StoreInst>(I))
-              threadFuncSlice->addCriterion(dyn_cast<Value>(I));
+            if (KLoop->isLoopHeader(&*BB))
+              depInstr.push_back(&*I);
+            else if (isa<LoadInst>(I) || isa<StoreInst>(I))
+              depInstr.push_back(&*I);
           }
         }
-        ISlice *inversedThreadFuncSlice = new ISlice(f);
-        inversedThreadFuncSlice->inverse(threadFuncSlice);
-        removeSlice((Function *)f, inversedThreadFuncSlice);
+
+        auto bound = depInstr.size();
+        for (int iter = 0; iter < bound; iter++){
+          Instruction *instr = depInstr[iter];
+          for (int i = 0; i < instr->getNumOperands(); i++){
+            if (isa<StoreInst>(instr) && i == 0)
+              continue;
+            if (Instruction *ii = dyn_cast<Instruction>(instr->getOperand(i))){
+              if (std::find(depInstr.begin(), depInstr.end(), ii) == depInstr.end())
+                depInstr.push_back(ii);
+            }
+          }
+          bound = depInstr.size();
+        }
+
+        for (auto BB = f->begin(); BB != f->end(); ++BB) {  // Basic block level
+          for (auto I = BB->begin(); I != BB->end(); ++I) {   // Instruction level   
+            Instruction *instr = &*I;
+            if (std::find(depInstr.begin(), depInstr.end(), instr) == depInstr.end() && !isa<TerminatorInst>(instr))
+              revInstr.push_back(instr);
+          }
+        }
+
+        for (auto &r: revInstr){
+          errs() << "Removing " << *r << "\n";
+          r->replaceAllUsesWith(UndefValue::get(dyn_cast<Value>(r)->getType()));
+          r->eraseFromParent();
+        }
       }
     }
   }
@@ -466,6 +492,7 @@ namespace boogieGen{
         instrResName.replace(instrResName.find("+"), 1, "0"); // boogie does not support 1e+2
       instrResName = "0x"+instrResName+type;
     }
+
     return instrResName;
   }
 
@@ -664,7 +691,7 @@ namespace boogieGen{
         }
       }
     }
-    bpl << "\tvar boogie_fp_mode : rmode;\n\tboogie_fp_mode := RNE;\n\tvalid := false;";
+    bpl << "\tvar boogie_fp_mode : rmode;\n\tvar undef:bv64;\n\tboogie_fp_mode := RNE;\n\tvalid := false;\n\thavoc undef;\n";
   }
 
   bool boogieGen::varFoundInList(Value *var, std::vector<Value *> *vars, Function *F){
@@ -698,17 +725,18 @@ namespace boogieGen{
   }
 
   void boogieGen::varDeclaration(Value *var){
-    if (var->getType()->isIntegerTy()){
-      if (var->getType()->isPointerTy())
-        bpl << "\tvar " << printNameInBoogie(var) << ": [bv64]bv32;\n"; // todo: getElementType()
-      else
-        bpl << "\tvar " << printNameInBoogie(var) << ": bv64;\n"; //<<dyn_cast<IntegerType>(var->getType())->getBitWidth()<<";\n";
+    if (printNameInBoogie(var) != "undef"){
+      if (var->getType()->isIntegerTy()){
+        if (var->getType()->isPointerTy())
+          bpl << "\tvar " << printNameInBoogie(var) << ": [bv64]bv32;\n"; // todo: getElementType()
+        else
+          bpl << "\tvar " << printNameInBoogie(var) << ": bv64;\n"; //<<dyn_cast<IntegerType>(var->getType())->getBitWidth()<<";\n";
+      }
+      else if (var->getType()->isPointerTy())
+        bpl << "\tvar " << printNameInBoogie(var) << ": bv64;\n"; // <<dyn_cast<IntegerType>(dyn_cast<PointerType>(var->getType())->getElementType())->getBitWidth()<<";\n";
+      else if (var->getType()->isFloatTy() || var->getType()->isDoubleTy())
+        bpl << "\tvar " << printNameInBoogie(var) << ": float53e11;\n"; // float = float24e8
     }
-    else if (var->getType()->isPointerTy())
-      bpl << "\tvar " << printNameInBoogie(var) << ": bv64;\n"; // <<dyn_cast<IntegerType>(dyn_cast<PointerType>(var->getType())->getElementType())->getBitWidth()<<";\n";
-    else if (var->getType()->isFloatTy() || var->getType()->isDoubleTy())
-      bpl << "\tvar " << printNameInBoogie(var) << ": float53e11;\n"; // float = float24e8
-    // TODO: array type
   }
 
   std::string boogieGen::getBlockLabel(BasicBlock *BB){
