@@ -92,8 +92,8 @@ namespace boogieGen{
             }
             else if (isa<LoadInst>(I) || isa<StoreInst>(I))
               depInstr.push_back(&*I);
-            else if (isa<BranchInst>(I)){ // increase precision by adding CFG related integer operations
-              if (I->getNumOperands() == 3){
+            else if (isa<BranchInst>(I) || isa<SwitchInst>(I)){ // increase precision by adding CFG related integer operations
+              if (I->getNumOperands() == 3 || isa<SwitchInst>(I)){
                 if (dyn_cast<Instruction>(I->getOperand(0))->getOperand(0)->getType()->isIntegerTy())
                   depInstr.push_back(&*I);
               }
@@ -209,8 +209,8 @@ namespace boogieGen{
 
     bpl << "\tend_time_0 := bv64add(bv64add(bv64mul(II, iteration_0), offset_0), latency_0);\n";
 
-    bpl << "\tassert (!valid_0 || !valid_1 || address_0 != address_1 || (load_0 && load_1) || label_0 == label_1 || bv64sgt(iteration_0, iteration_1) || bv64sgt(start_time_1, end_time_0));\n";
-    bpl << "\tassert (!valid_0 || !valid_1 || !valid_2 || label_0 == label_1 || label_0 == label_2 || label_1 == label_2 || !(start_time_0 == start_time_1 && start_time_1 == start_time_2));\n";
+    bpl << "\tassert (!valid_0 || !valid_1 || array_0 != array_1 || address_0 != address_1 || (load_0 && load_1) || label_0 == label_1 || bv64sgt(iteration_0, iteration_1) || bv64sgt(start_time_1, end_time_0));\n";
+    bpl << "\tassert (!valid_0 || !valid_1 || !valid_2 || label_0 == label_1 || label_0 == label_2 || label_1 == label_2 || array_0 != array_1 || array_1 != array_2 || !(start_time_0 == start_time_1 && start_time_1 == start_time_2));\n";
 
     bpl << "}\n";
 
@@ -539,11 +539,8 @@ namespace boogieGen{
               break;
               
           case Instruction::Br:     // br
-              if (I->getNumOperands() == 3)
-              {
-                  if (!varFoundInList((Value *)(I->getOperand(0)), &vars, F))
-                      varDeclaration((Value *)(I->getOperand(0)));
-              }
+              break;
+          case Instruction::Switch:
               break;
               
           case Instruction::Add:     // add
@@ -814,7 +811,9 @@ namespace boogieGen{
         // Here add assertion of loop invariant conditions at start of the loop
         if(KLoop->isLoopHeader(&*BB))
         {
-          for (auto I = BB->begin(); I != BB->end(); I++){
+          // for (auto I = BB->begin(); I != BB->end(); I++){
+            // assume the first phi is the loop iterator
+            Instruction *I = dyn_cast<Instruction>(BB->begin());
             if (llvm::PHINode *phiInst = dyn_cast<llvm::PHINode>(I)){
               invariance *invar = new invariance;
               std::string startSign, endSign, startBound, endBound;
@@ -865,7 +864,11 @@ namespace boogieGen{
                   }
                 }
               }
-              assert(incr != -1 && eq != -1);
+              if (incr == -1 || eq == -1){
+                errs() << "Loop invariant extraction failed. " << printNameInBoogie(phiInst) << " : " << incr << ", " << eq << "\n";
+                assert(incr != -1 && eq != -1);
+              }
+              
 
               std::string bits = "";
               if (IntegerType* temp = dyn_cast<IntegerType>(I->getType()))
@@ -899,7 +902,7 @@ namespace boogieGen{
               bpl << "\thavoc " << printNameInBoogie(&*I) << ";\n";
               bpl << "\tassume ( " << invar->invar << ");\n";
             }
-          }            
+          // }            
         }   // end of insert loop invariants in the beginning
         
         std::string callName;
@@ -939,6 +942,15 @@ namespace boogieGen{
                         bpl << "\tif(" << printNameInBoogie((Value *)I->getOperand(0)) << " == 1bv1) {goto bb_"<< getBlockLabel((BasicBlock *)(I->getOperand(2))) << ";} else {goto bb_" << getBlockLabel((BasicBlock *)(I->getOperand(1))) << ";}\n";
                     else
                         errs() << "Error: Instruction decoding error at br instruction: " << *I << "\n";
+                    break;
+                case Instruction::Switch:
+                    if (SwitchInst *sw = dyn_cast<SwitchInst>(I)){
+                      Value *cond = sw->getCondition();
+                      bpl << "\t";
+                      for (auto i = sw->case_begin(); i < sw->case_end(); i++)
+                        bpl << "if(" << printNameInBoogie(cond) << " == " << printNameInBoogie(i->getCaseValue()) << "){goto bb_" << getBlockLabel(i->getCaseSuccessor()) << ";}\n\telse ";
+                      bpl << "{goto bb_" << getBlockLabel(sw->getDefaultDest()) << ";}\n";
+                    }
                     break;
                     
                 case Instruction::Add:     // add
