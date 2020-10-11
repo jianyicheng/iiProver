@@ -7,7 +7,7 @@ int main(){
    		B[i] = i - 500;
    }
 
-   for (int i = 0; i < 100; i++){
+   for (int i = 0; i < 900; i++){
 	    double a = A[i];
 	    if (a > 100){
 	        double b = (((((a+0.64)*a+0.7)*a+0.21)*a+0.33)*a+0.25)*a+0.125;

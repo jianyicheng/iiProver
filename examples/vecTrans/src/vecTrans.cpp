@@ -2,7 +2,7 @@
 
 void vecTrans(double A[1000]){
 #pragma HLS ARRAY_PARTITION variable=A block factor=2 dim=1
-	for (int i = 0; i < 100; i++){
+	for (int i = 0; i < 900; i++){
 	//#pragma HLS PIPELINE
 	#pragma HLS PIPELINE II=2
 	#pragma HLS DEPENDENCE variable=A array inter false
