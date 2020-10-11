@@ -382,9 +382,9 @@ namespace boogieGen{
     bpl << "function {:bvbuiltin \"(_ to_fp 11 53)\"} to_double(real) returns(float53e11);\n";
 
     bpl << "// Bit vector function prototypes\n";
-    int MIN_BIT = 64;
+    int MIN_BIT = 1;
     int MAX_BIT = 64;
-    int step = 32;
+    int step = 1;
     bpl << "// Arithmetic\n";
     for (int i = MIN_BIT; i <= MAX_BIT; i+=step){
       bpl << "function {:bvbuiltin \"bvadd\"} bv"<<i<<"add(bv"<<i<<",bv"<<i<<") returns(bv"<<i<<");\n";
@@ -454,8 +454,8 @@ namespace boogieGen{
     bpl << "// Datatype conversion from other bv to bv\n";
     for (int i = MIN_BIT; i <= MAX_BIT; i+=step){
       for (int j = i+1; j <= MAX_BIT; j++){
-        bpl << "function {:bvbuiltin \"zero_extend "<<i<<"\"} zext.bv"<<i<<".bv"<<j<<"(bv"<<i<<") returns(bv"<<j<<");\n";
-        bpl << "function {:bvbuiltin \"sign_extend "<<i<<"\"} sext.bv"<<i<<".bv"<<j<<"(bv"<<i<<") returns(bv"<<j<<");\n";
+        bpl << "function {:bvbuiltin \"zero_extend "<<j-i<<"\"} zext.bv"<<i<<".bv"<<j<<"(bv"<<i<<") returns(bv"<<j<<");\n";
+        bpl << "function {:bvbuiltin \"sign_extend "<<j-i<<"\"} sext.bv"<<i<<".bv"<<j<<"(bv"<<i<<") returns(bv"<<j<<");\n";
       }
     }
 
@@ -483,30 +483,14 @@ namespace boogieGen{
     if (ConstantInt *constVar = dyn_cast<ConstantInt>(I))
     {
       int bits = dyn_cast<IntegerType>(I->getType())->getBitWidth();
-        if (constVar->isNegative())
-        {
-          int n = atoi(instrResName.c_str());
-          n = -n;
-          int binaryNum[bits];
-          for (int i = 0; i < bits; i++){
-            binaryNum[bits-1-i] = 1 - (n % 2);
-            n = n / 2; 
-          }
-          binaryNum[bits-1] = 1; // negative
-
-          int b = 0;
-          for (int i = bits-1; i >=0; i--){
-            b *= 2;
-            b += binaryNum[i];
-          }
-          b++;
-          return (std::to_string(b)+"bv64"); //+std::to_string(bits));
-        }
-        else if (instrResName == "false")
-          return("0bv64"); //+std::to_string(bits));
-        else if (instrResName == "true")
-          return("1bv64"); //+std::to_string(bits)); 
-          return(instrResName+"bv64"); //+std::to_string(bits));
+      if (constVar->isNegative())
+        return ("bv"+std::to_string(bits)+"neg("+instrResName.substr(1)+"bv"+std::to_string(bits)+")");
+      else if (instrResName == "false")
+        return("0bv1");
+      else if (instrResName == "true")
+        return("1bv1");
+      else 
+        return(instrResName+"bv"+std::to_string(bits));
     }
     else if (isa<ConstantFP>(I)){
       std::string type = "";
@@ -527,6 +511,11 @@ namespace boogieGen{
       else if (instrResName.find("+") != std::string::npos)
         instrResName.replace(instrResName.find("+"), 1, "0"); // boogie does not support 1e+2
       instrResName = "0x"+instrResName+type;
+    }
+    else if (instrResName == "undef"){
+      assert(isa<IntegerType>(I->getType())); // JC TODO: converting undef to floating point
+      int bits = dyn_cast<IntegerType>(I->getType())->getBitWidth();
+      instrResName += ".bv"+std::to_string(bits);
     }
 
     return instrResName;
@@ -727,7 +716,7 @@ namespace boogieGen{
         }
       }
     }
-    bpl << "\tvar boogie_fp_mode : rmode;\n\tvar undef:bv64;\n\tboogie_fp_mode := RNE;\n\tvalid := false;\n\thavoc undef;\n";
+    bpl << "\tvar boogie_fp_mode : rmode;\n\tboogie_fp_mode := RNE;\n\tvalid := false;\n";
   }
 
   bool boogieGen::varFoundInList(Value *var, std::vector<Value *> *vars, Function *F){
@@ -761,18 +750,18 @@ namespace boogieGen{
   }
 
   void boogieGen::varDeclaration(Value *var){
-    if (printNameInBoogie(var) != "undef"){
+    // if (printNameInBoogie(var) != "undef"){
       if (var->getType()->isIntegerTy()){
         if (var->getType()->isPointerTy())
           bpl << "\tvar " << printNameInBoogie(var) << ": [bv64]bv32;\n"; // todo: getElementType()
         else
-          bpl << "\tvar " << printNameInBoogie(var) << ": bv64;\n"; //<<dyn_cast<IntegerType>(var->getType())->getBitWidth()<<";\n";
+          bpl << "\tvar " << printNameInBoogie(var)  << " : bv" <<dyn_cast<IntegerType>(var->getType())->getBitWidth()<<";\n";
       }
       else if (var->getType()->isPointerTy())
-        bpl << "\tvar " << printNameInBoogie(var) << ": bv64;\n"; // <<dyn_cast<IntegerType>(dyn_cast<PointerType>(var->getType())->getElementType())->getBitWidth()<<";\n";
+        bpl << "\tvar " << printNameInBoogie(var) << " : bv" <<dyn_cast<IntegerType>(dyn_cast<PointerType>(var->getType())->getElementType())->getBitWidth()<<";\n";
       else if (var->getType()->isFloatTy() || var->getType()->isDoubleTy())
         bpl << "\tvar " << printNameInBoogie(var) << ": float53e11;\n"; // float = float24e8
-    }
+    // }
   }
 
   std::string boogieGen::getBlockLabel(BasicBlock *BB){
@@ -839,18 +828,18 @@ namespace boogieGen{
                 bits = std::to_string(temp->getBitWidth());
 
               if (incr){
-                startSign = "bv64sge(";
+                startSign = "bv"+bits+"uge(";
                 if (eq)
-                    endSign = "bv64sle(";
+                    endSign = "bv"+bits+"ule(";
                 else
-                    endSign = "bv64slt(";
+                    endSign = "bv"+bits+"ult(";
               }
               else {
-                startSign = "bv64sle(";
+                startSign = "bv"+bits+"ule(";
                 if (eq)
-                    endSign = "bv64sge(";
+                    endSign = "bv"+bits+"uge(";
                 else
-                    endSign = "bv64sgt(";
+                    endSign = "bv"+bits+"ugt(";
               }
               
               invar->instr = phiInst;
@@ -903,7 +892,7 @@ namespace boogieGen{
                     if (I->getNumOperands() == 1) // if (inst->isConditional())?
                         bpl << "\tgoto bb_"<< getBlockLabel((BasicBlock *)(I->getOperand(0))) << ";\n";
                     else if (I->getNumOperands() == 3)
-                        bpl << "\tif(" << printNameInBoogie((Value *)I->getOperand(0)) << " == 1bv64) {goto bb_"<< getBlockLabel((BasicBlock *)(I->getOperand(2))) << ";} else {goto bb_" << getBlockLabel((BasicBlock *)(I->getOperand(1))) << ";}\n";
+                        bpl << "\tif(" << printNameInBoogie((Value *)I->getOperand(0)) << " == 1bv1) {goto bb_"<< getBlockLabel((BasicBlock *)(I->getOperand(2))) << ";} else {goto bb_" << getBlockLabel((BasicBlock *)(I->getOperand(1))) << ";}\n";
                     else
                         errs() << "Error: Instruction decoding error at br instruction: " << *I << "\n";
                     break;
@@ -912,16 +901,16 @@ namespace boogieGen{
                     if (OverflowingBinaryOperator *op = dyn_cast<OverflowingBinaryOperator>(I)) {
                         if ((op->hasNoUnsignedWrap()) && (op->hasNoSignedWrap()))
                             // has both nuw and nsw
-                            bpl << "\t" << printNameInBoogie(&*I) << " := bv64add("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
+                            bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"add("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
                         else if (op->hasNoUnsignedWrap())
                             // only nuw
-                            bpl << "\t" << printNameInBoogie(&*I) << " := bv64add("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
+                            bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"add("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
                         else if (op->hasNoSignedWrap())
                             // only nsw
-                            bpl << "\t" << printNameInBoogie(&*I) << " := bv64add("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
+                            bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"add("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
                         else
                             // normal add
-                            bpl << "\t" << printNameInBoogie(&*I) << " := bv64add("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                            bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"add("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
                     }
                     else
                         errs() << "Error: Instruction decoding error at add instruction: " << *I << "\n";
@@ -945,16 +934,16 @@ namespace boogieGen{
                     if (OverflowingBinaryOperator *op = dyn_cast<OverflowingBinaryOperator>(I)) {
                         if ((op->hasNoUnsignedWrap()) && (op->hasNoSignedWrap()))
                             // has both nuw and nsw
-                            bpl << "\t" << printNameInBoogie(&*I) << " := bv64sub("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
+                            bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"sub("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
                         else if (op->hasNoUnsignedWrap())
                             // only nuw
-                            bpl << "\t" << printNameInBoogie(&*I) << " := bv64sub("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
+                            bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"sub("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
                         else if (op->hasNoSignedWrap())
                             // only nsw
-                            bpl << "\t" << printNameInBoogie(&*I) << " := bv64sub("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
+                            bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"sub("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";       // ---might has problems...
                         else
                             // normal add
-                            bpl << "\t" << printNameInBoogie(&*I) << " := bv64sub("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                            bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"sub("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
                     }
                     else
                         errs() << "Error: Instruction decoding error at sub instruction: " << *I << "\n";
@@ -983,23 +972,23 @@ namespace boogieGen{
                     break;
                     
                 case Instruction::Mul:     // mul
-                    bpl << "\t" << printNameInBoogie(&*I) << " := bv64mul("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                    bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"mul("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
                     break;
                 case Instruction::Shl:     // shl
-                    bpl << "\t" << printNameInBoogie(&*I) << " := bv64shl("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                    bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"shl("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
                     break;
                 case Instruction::LShr:     // lshr
-                    bpl << "\t" << printNameInBoogie(&*I) << " := bv64lshr("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                    bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"lshr("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
                     break;
                     
                 case Instruction::AShr:     // ashr
-                    bpl << "\t" << printNameInBoogie(&*I) << " := bv64ashr("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                    bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"ashr("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
                     break;
                 case Instruction::And:     // and
-                    bpl << "\t" << printNameInBoogie(&*I) << " := bv64and("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                    bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"and("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
                     break;
                 case Instruction::Or:     // or
-                    bpl << "\t" << printNameInBoogie(&*I) << " := bv64or("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                    bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"or("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
                     break;
                 case Instruction::Load:     // load
                     // JC: add your if(*) here
@@ -1026,7 +1015,10 @@ namespace boogieGen{
                         search = arrays.size();
                         arrays.push_back((Value *)(dyn_cast<Instruction>(I->getOperand(0))->getOperand(0)));
                       }
-                      bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(0))->getOperand(2)) <<";\n\t\titeration := " << printNameInBoogie(loopiter) << ";\n\t\tload := true;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
+                      if (dyn_cast<IntegerType>(loopiter->getType())->getBitWidth() == 64)
+                        bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(0))->getOperand(2)) <<";\n\t\titeration := " << printNameInBoogie(loopiter) << ";\n\t\tload := true;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
+                      else
+                        bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(0))->getOperand(2)) <<";\n\t\titeration := zext.bv" << dyn_cast<IntegerType>(loopiter->getType())->getBitWidth() << ".bv64(" << printNameInBoogie(loopiter) << ");\n\t\tload := true;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
                     }
                     break;
                     
@@ -1054,7 +1046,10 @@ namespace boogieGen{
                         search = arrays.size();
                         arrays.push_back((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(0));
                       }
-                      bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(2)) <<";\n\t\titeration := " << printNameInBoogie(loopiter) << ";\n\t\tload := false;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
+                      if (dyn_cast<IntegerType>(loopiter->getType())->getBitWidth() == 64)
+                        bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(2)) <<";\n\t\titeration := " << printNameInBoogie(loopiter) << ";\n\t\tload := false;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
+                      else
+                        bpl << "\tif(*){\n\t\tlabel := "<< mn->label <<"bv64;\n\t\taddress := "<< printNameInBoogie((Value *)dyn_cast<Instruction>(I->getOperand(1))->getOperand(2)) <<";\n\t\titeration := zext.bv" << dyn_cast<IntegerType>(loopiter->getType())->getBitWidth() << ".bv64(" << printNameInBoogie(loopiter) << ");\n\t\tload := false;\n\t\tvalid := true;\n\t\tarray := " << search << "bv64;\n\t\treturn;\n\t}\n";
                     }
                     break;
                 case Instruction::GetElementPtr:     // getelementptr                               // this can be ignored
@@ -1063,11 +1058,11 @@ namespace boogieGen{
                 case Instruction::Trunc:     // trunc
                     assert(isa<IntegerType>(I->getType()));
                     assert(isa<IntegerType>(I->getOperand(0)->getType()));
-                    bpl << "\t" << printNameInBoogie(&*I) << " := bv64and(" << (1 << dyn_cast<IntegerType>(I->getType())->getBitWidth())-1 << "bv64, " << printNameInBoogie((Value *)I->getOperand(0)) << ");\n";
+                    bpl << "\t" << printNameInBoogie(&*I) << " := " << printNameInBoogie((Value *)I->getOperand(0)) << "["<<dyn_cast<IntegerType>(I->getType())->getBitWidth()<<":0];\n";
                     break;
                     
                 case Instruction::ZExt:     // zext
-                    bpl << "\t" << printNameInBoogie(&*I) << " := " << printNameInBoogie((Value *)I->getOperand(0)) << ";\n";
+                    bpl << "\t" << printNameInBoogie(&*I) << " := zext.bv" << dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth() << ".bv" << dyn_cast<IntegerType>(I->getType())->getBitWidth() << "(" << printNameInBoogie((Value *)I->getOperand(0)) << ");\n";
                     break;
 
                 case Instruction::SExt:     // sext
@@ -1077,34 +1072,34 @@ namespace boogieGen{
                 case Instruction::ICmp:    // icmp
                     if (CmpInst *cmpInst = dyn_cast<CmpInst>(&*I)) {
                         if (cmpInst->getPredicate() == CmpInst::ICMP_EQ) {
-                            bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " == " << printNameInBoogie((Value *)I->getOperand(1)) << ") { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " == " << printNameInBoogie((Value *)I->getOperand(1)) << ") { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_NE) {
-                            bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " != " << printNameInBoogie((Value *)I->getOperand(1)) << ") { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " != " << printNameInBoogie((Value *)I->getOperand(1)) << ") { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_UGT) {
-                            bpl << "\tif (bv64ugt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n"; // ---might has problems...
+                            bpl << "\tif (bv1ugt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_UGE) {
-                            bpl << "\tif (bv64uge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n"; // ---might has problems...
+                            bpl << "\tif (bv1uge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_ULT) {
-                            bpl << "\tif (bv64ult(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n"; // ---might has problems...
+                            bpl << "\tif (bv1ult(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_ULE) {
-                            bpl << "\tif (bv64ule(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n"; // ---might has problems...
+                            bpl << "\tif (bv1ule(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_SGT) {
-                            bpl << "\tif (bv64sgt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (bv1sgt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_SGE) {
-                            bpl << "\tif (bv64sge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (bv1sge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_SLT) {
-                            bpl << "\tif (bv64slt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (bv1slt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_SLE) {
-                            bpl << "\tif (bv64sle(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (bv1sle(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else
                             errs() << "Error: Instruction decoding error at icmp instruction: " << *I << "\n";
@@ -1114,34 +1109,34 @@ namespace boogieGen{
                     ftype = (I->getOperand(0)->getType()->isDoubleTy())?"d":"f";
                     if (FCmpInst *cmpInst = dyn_cast<FCmpInst>(&*I)) {
                         if (cmpInst->getPredicate() == FCmpInst::FCMP_OEQ) {
-                            bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " == " << printNameInBoogie((Value *)I->getOperand(1)) << ") { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " == " << printNameInBoogie((Value *)I->getOperand(1)) << ") { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == FCmpInst::FCMP_ONE) {
-                            bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " != " << printNameInBoogie((Value *)I->getOperand(1)) << ") { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " != " << printNameInBoogie((Value *)I->getOperand(1)) << ") { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == FCmpInst::FCMP_UGT) {
-                            bpl << "\tif (" << ftype << "gt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n"; // ---might has problems...
+                            bpl << "\tif (" << ftype << "gt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == FCmpInst::FCMP_UGE) {
-                            bpl << "\tif (" << ftype << "ge(" <<  printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n"; // ---might has problems...
+                            bpl << "\tif (" << ftype << "ge(" <<  printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == FCmpInst::FCMP_ULT) {
-                            bpl << "\tif (" <<  ftype << "lt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n"; // ---might has problems...
+                            bpl << "\tif (" <<  ftype << "lt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == FCmpInst::FCMP_ULE) {
-                            bpl << "\tif (" <<  ftype << "le(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n"; // ---might has problems...
+                            bpl << "\tif (" <<  ftype << "le(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == FCmpInst::FCMP_OGT) {
-                            bpl << "\tif (" <<  ftype << "gt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (" <<  ftype << "gt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == FCmpInst::FCMP_OGE) {
-                            bpl << "\tif (" <<  ftype << "ge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (" <<  ftype << "ge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == FCmpInst::FCMP_OLT) {
-                            bpl << "\tif (" <<  ftype << "lt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (" <<  ftype << "lt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == FCmpInst::FCMP_OLE) {
-                            bpl << "\tif (" <<  ftype << "le(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv64; } else { " << printNameInBoogie(&*I) << " := 0bv64; }\n";
+                            bpl << "\tif (" <<  ftype << "le(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ")) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else
                             errs() << "Error: Instruction decoding error at icmp instruction: " << *I << "\n";
@@ -1160,7 +1155,7 @@ namespace boogieGen{
                         assert(isa<IntegerType>(I->getOperand(0)->getType()));
                         assert(isa<ConstantInt>(I->getOperand(1)));
                         assert(isa<ConstantInt>(I->getOperand(2)));
-                        int bwRes = extractNum(callName.c_str(), "_ssdm_op_PartSelect.i");
+                        int bwRes = extractNum(callName.c_str(), "_ssdm_op_PartSelect.i");  // result bw
                         int bw0 = dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth();
                         std::string temp = printNameInBoogie(I->getOperand(1));
                         int b1 = std::stoi(temp.substr(0, temp.find("bv")));
@@ -1168,7 +1163,7 @@ namespace boogieGen{
                         int b2 = std::stoi(temp.substr(0, temp.find("bv")));
                         assert(bwRes == abs(b1-b2)+1);
                         if (b1 < b2) // forward mode
-                          bpl << "\t" << printNameInBoogie(&*I) << " := " << "bv64and("<<(1 << (b1-b2+2))-1 << "bv64, bv64lshr(" <<printNameInBoogie((Value *)(I->getOperand(0))) << "," << printNameInBoogie((Value *)(I->getOperand(1))) <<"));\n";
+                          bpl << "\t" << printNameInBoogie(&*I) << " := " << "(bv"<<bw0<<"and("<<(1 << (b1-b2+2))-1 << "bv" << bw0 << ", bv" << bw0 << "lshr(" <<printNameInBoogie((Value *)(I->getOperand(0))) << "," << b1 << "bv" << bw0 <<")))["<<bwRes<<":0];\n";
                         else
                           errs() << "Undefined instruction found." << *I << "\n";
                       }
@@ -1180,7 +1175,8 @@ namespace boogieGen{
                         assert(isa<IntegerType>(I->getOperand(1)->getType()));
                         int bw0 = dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth();
                         int bw1 = dyn_cast<IntegerType>(I->getOperand(1)->getType())->getBitWidth();
-                        bpl << "\t" << printNameInBoogie(&*I) << " := bv64or(bv64shl(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << bw1 <<"bv64), " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                        assert (bw0+bw1 == bwRes);
+                        bpl << "\t" << printNameInBoogie(&*I) << " := bv"<<bwRes<<"or(bv"<<bwRes<<"shl(zext.bv" << bw0 << ".bv"<<bwRes<<"("<< printNameInBoogie((Value *)I->getOperand(0)) << "), " << bw1 << "bv"<<bwRes<<"), zext.bv" << bw1 << ".bv"<<bwRes<<"(" << printNameInBoogie((Value *)I->getOperand(1)) << "));\n";
                       }
                       else
                         errs() << "Error: Call functions found in the function: " << *I << "\n";
