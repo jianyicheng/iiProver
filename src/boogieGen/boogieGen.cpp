@@ -73,7 +73,7 @@ namespace boogieGen{
           for (auto I = BB->begin(); I != BB->end(); ++I) {   // Instruction level
             if (KLoop->isLoopHeader(&*BB)){
               depInstr.push_back(&*I);
-              if (isa<BranchInst>(I)){
+              if (isa<BranchInst>(I)){  // get target II information
                 std::string pplIIBuff;
                 raw_string_ostream string_stream(pplIIBuff);
                 dyn_cast<Metadata>(dyn_cast<MDNode>(I->getMetadata("llvm.loop")->getOperand(3))->getOperand(1))->printAsOperand(string_stream);
@@ -92,6 +92,12 @@ namespace boogieGen{
             }
             else if (isa<LoadInst>(I) || isa<StoreInst>(I))
               depInstr.push_back(&*I);
+            else if (isa<BranchInst>(I)){ // increase precision by adding CFG related integer operations
+              if (I->getNumOperands() == 3){
+                if (dyn_cast<Instruction>(I->getOperand(0))->getOperand(0)->getType()->isIntegerTy())
+                  depInstr.push_back(&*I);
+              }
+            }
           }
         }
 
@@ -102,7 +108,12 @@ namespace boogieGen{
             if (isa<StoreInst>(instr) && i == 0)
               continue;
             if (Instruction *ii = dyn_cast<Instruction>(instr->getOperand(i))){
-              if (std::find(depInstr.begin(), depInstr.end(), ii) == depInstr.end())
+              bool skip = false;
+              for (int j = 0; j < ii->getNumOperands(); j++){
+                if (ii->getOperand(j)->getType()->isFloatTy() || ii->getOperand(j)->getType()->isDoubleTy())
+                  skip = true;
+              }   // increase precision by adding CFG related integer operations
+              if (std::find(depInstr.begin(), depInstr.end(), ii) == depInstr.end() && !skip)
                 depInstr.push_back(ii);
             }
           }
@@ -223,12 +234,9 @@ namespace boogieGen{
             tempIdx++;
           std::string s = line.substr(line.find("(II) = ")+7, tempIdx-line.find("(II) = ")-7);
           int reportII = std::stoi(s);
-          if (II != -1 && reportII != II){
-            errs() << "Mismatched IIs for the given loop.\n";
-            assert(0);
-          }
-          else
-            II = reportII;
+          if (II != -1 && reportII != II)
+            errs() << "Warning: Mismatched IIs for the given loop. Synthesised II = "<<reportII<<"\n";
+          II = reportII;
         }
 
         if (line.find("<SV = ") != std::string::npos)
@@ -483,7 +491,7 @@ namespace boogieGen{
     if (ConstantInt *constVar = dyn_cast<ConstantInt>(I))
     {
       int bits = dyn_cast<IntegerType>(I->getType())->getBitWidth();
-      if (constVar->isNegative())
+      if (constVar->isNegative() && bits > 1)
         return ("bv"+std::to_string(bits)+"neg("+instrResName.substr(1)+"bv"+std::to_string(bits)+")");
       else if (instrResName == "false")
         return("0bv1");
@@ -562,6 +570,15 @@ namespace boogieGen{
               break;
           
           case Instruction::FAdd:     // fadd
+              if (!varFoundInList(&*I, &vars, F))
+                  varDeclaration(&*I);
+              if (!varFoundInList((Value *)(I->getOperand(0)), &vars, F))
+                  varDeclaration((Value *)(I->getOperand(0)));
+              if (!varFoundInList((Value *)(I->getOperand(1)), &vars, F))
+                  varDeclaration((Value *)(I->getOperand(1)));
+              break;
+
+          case Instruction::Xor:     // xor
               if (!varFoundInList(&*I, &vars, F))
                   varDeclaration(&*I);
               if (!varFoundInList((Value *)(I->getOperand(0)), &vars, F))
@@ -710,7 +727,7 @@ namespace boogieGen{
               if (!varFoundInList((Value *)(I->getOperand(2)), &vars, F))
                   varDeclaration((Value *)(I->getOperand(2)));
               break;
-              
+          
           default:
             errs() << "Declaring: Found unkown instruction: " << *I << "\n";
         }
@@ -821,6 +838,33 @@ namespace boogieGen{
                     incr = 0;
                 }
               }
+              if (incr != -1 || eq != -1){    // the increment can be in the header / exit
+                auto bbList = KLoop->getLoopFor(&*BB)->getBlocks();
+                BasicBlock *BBExit = NULL;
+                if (std::find(bbList.begin(), bbList.end(), phiInst->getIncomingBlock(1)) != bbList.end())
+                  BBExit = phiInst->getIncomingBlock(1);
+                else if (std::find(bbList.begin(), bbList.end(), phiInst->getIncomingBlock(0)) != bbList.end())
+                  BBExit = phiInst->getIncomingBlock(1);
+                else
+                  errs() << "Error: Cannot find loop exit.\n";
+                for (auto ii = BBExit->begin(); ii != BBExit->end(); ii++){
+                  if (CmpInst *cmpInst = dyn_cast<CmpInst>(&*ii)){ // JC: depends Vitis HLS - need check
+                    if (cmpInst->getPredicate() == CmpInst::ICMP_EQ || cmpInst->getPredicate() == CmpInst::ICMP_NE || cmpInst->getPredicate() == CmpInst::ICMP_UGT || cmpInst->getPredicate() == CmpInst::ICMP_ULT || cmpInst->getPredicate() == CmpInst::ICMP_SGT || cmpInst->getPredicate() == CmpInst::ICMP_SLT)
+                      eq = 0;
+                    else if (cmpInst->getPredicate() == CmpInst::ICMP_UGE || cmpInst->getPredicate() == CmpInst::ICMP_ULE || cmpInst->getPredicate() == CmpInst::ICMP_SGE || cmpInst->getPredicate() == CmpInst::ICMP_SLE)
+                      eq = 1;
+                    endBound = printNameInBoogie(cmpInst->getOperand(1));
+                  }
+                  else if (ii->getOpcode() == Instruction::Add){
+                    if (ii->getOperand(0) == &*I || ii->getOperand(1) == &*I)
+                      incr = 1;
+                  }
+                  else if (ii->getOpcode() == Instruction::Sub){
+                    if (ii->getOperand(0) == &*I || ii->getOperand(1) == &*I)
+                      incr = 0;
+                  }
+                }
+              }
               assert(incr != -1 && eq != -1);
 
               std::string bits = "";
@@ -921,6 +965,10 @@ namespace boogieGen{
                       bpl << "\t" << printNameInBoogie(&*I) << " := dadd(boogie_fp_mode, "<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
                     else
                       bpl << "\t" << printNameInBoogie(&*I) << " := fadd(boogie_fp_mode, "<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";
+                    break;
+
+                case Instruction::Xor:     // xor
+                      bpl << "\t" << printNameInBoogie(&*I) << " := bv"<< dyn_cast<IntegerType>(I->getType())->getBitWidth() <<"xor("<< printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ");\n";  
                     break;
 
                 case Instruction::FMul:     // fmul
@@ -1078,28 +1126,28 @@ namespace boogieGen{
                             bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " != " << printNameInBoogie((Value *)I->getOperand(1)) << ") { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_UGT) {
-                            bpl << "\tif (bv1ugt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
+                            bpl << "\tif (bv"<<dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth()<<"ugt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_UGE) {
-                            bpl << "\tif (bv1uge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
+                            bpl << "\tif (bv"<<dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth()<<"uge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_ULT) {
-                            bpl << "\tif (bv1ult(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
+                            bpl << "\tif (bv"<<dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth()<<"ult(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_ULE) {
-                            bpl << "\tif (bv1ule(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
+                            bpl << "\tif (bv"<<dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth()<<"ule(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n"; // ---might has problems...
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_SGT) {
-                            bpl << "\tif (bv1sgt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
+                            bpl << "\tif (bv"<<dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth()<<"sgt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_SGE) {
-                            bpl << "\tif (bv1sge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
+                            bpl << "\tif (bv"<<dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth()<<"sge(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_SLT) {
-                            bpl << "\tif (bv1slt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
+                            bpl << "\tif (bv"<<dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth()<<"slt(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else if (cmpInst->getPredicate() == CmpInst::ICMP_SLE) {
-                            bpl << "\tif (bv1sle(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
+                            bpl << "\tif (bv"<<dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth()<<"sle(" << printNameInBoogie((Value *)I->getOperand(0)) << ", " << printNameInBoogie((Value *)I->getOperand(1)) << ") == true) { " << printNameInBoogie(&*I) << " := 1bv1; } else { " << printNameInBoogie(&*I) << " := 0bv1; }\n";
                         }
                         else
                             errs() << "Error: Instruction decoding error at icmp instruction: " << *I << "\n";
@@ -1185,7 +1233,7 @@ namespace boogieGen{
                       errs() << "Error: Call functions found in the function: " << *I << "\n";
                     break;
                 case Instruction::Select:     // select
-                    bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " == 1bv64) { " << printNameInBoogie(&*I) << " := " << printNameInBoogie((Value *)I->getOperand(1)) <<  "; } else { " << printNameInBoogie(&*I) << " := " << printNameInBoogie((Value *)I->getOperand(2)) << "; }\n";
+                    bpl << "\tif (" << printNameInBoogie((Value *)I->getOperand(0)) << " == 1bv"<<dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth()<<") { " << printNameInBoogie(&*I) << " := " << printNameInBoogie((Value *)I->getOperand(1)) <<  "; } else { " << printNameInBoogie(&*I) << " := " << printNameInBoogie((Value *)I->getOperand(2)) << "; }\n";
                     break;
                 default:
                     errs() << "Decoding: Found unkown instruction: " << *I << "\n";
