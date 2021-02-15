@@ -1,7 +1,7 @@
 #!make
 include ../env.tcl
 
-BENCH = vecTrans loopCond dist_itr
+BENCH = vecTrans loopCond dist_itr quard top
 max = 100
 min = 1
 mode = lite

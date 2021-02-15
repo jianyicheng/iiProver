@@ -18,14 +18,10 @@ dotnet tool install --global boogie
 
 # install llvm-6.0
 git clone http://llvm.org/git/llvm.git --branch release_60 --depth 1
-#cd llvm/tools                                             
-#git clone http://llvm.org/git/clang.git --branch release_60 --depth 1
-#cd ..                                                                                   
 cd llvm
-mkdir _build                                                                                            
-cd _build                                                                                               
-cmake .. -DCMAKE_BUILD_TYPE=DEBUG -DLLVM_INSTALL_UTILS=ON -DLLVM_TARGETS_TO_BUILD="X86" -DCMAKE_INSTALL_
-PREFIX=../../llvm-6.0                                                                                   
+mkdir _build
+cd _build
+cmake .. -DCMAKE_BUILD_TYPE=DEBUG -DLLVM_INSTALL_UTILS=ON -DLLVM_TARGETS_TO_BUILD="X86" -DCMAKE_INSTALL_PREFIX=../../llvm-6.0
 make -j4
 make install 
 

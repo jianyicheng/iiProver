@@ -1238,8 +1238,17 @@ namespace boogieGen{
                         assert (bw0+bw1 == bwRes);
                         bpl << "\t" << printNameInBoogie(&*I) << " := bv"<<bwRes<<"or(bv"<<bwRes<<"shl(zext.bv" << bw0 << ".bv"<<bwRes<<"("<< printNameInBoogie((Value *)I->getOperand(0)) << "), " << bw1 << "bv"<<bwRes<<"), zext.bv" << bw1 << ".bv"<<bwRes<<"(" << printNameInBoogie((Value *)I->getOperand(1)) << "));\n";
                       }
+                      else if (strstr(callName.c_str(), "_ssdm_op_BitSelect") != NULL){
+                        int bwRes = extractNum(callName.c_str(), "_ssdm_op_BitSelect.i");
+                        assert(bwRes == 1);
+                        assert(isa<IntegerType>(I->getOperand(0)->getType()));
+                        assert(isa<IntegerType>(I->getOperand(1)->getType()));
+                        int bw0 = dyn_cast<IntegerType>(I->getOperand(0)->getType())->getBitWidth();
+                        int bw1 = dyn_cast<IntegerType>(I->getOperand(1)->getType())->getBitWidth();
+                        bpl << "\tif(bv" << bw0 << "and(bv"<<bw1<<"shl(1bv" << bw1 << ", " << printNameInBoogie((Value *)I->getOperand(1)) << "), " << printNameInBoogie((Value *)I->getOperand(0)) << ") != 0bv"<<bw1<<") {"<<printNameInBoogie(&*I) << " := 1bv1;} else {"<<printNameInBoogie(&*I) << " := 0bv1;}\n";
+                      }
                       else
-                        errs() << "Error: Call functions found in the function: " << *I << "\n";
+                        errs() << "Error: ssdm Call functions found in the function: " << *I << "\n";
                     }
                     else if (dyn_cast<Function>(I->getOperand(I->getNumOperands()-1))->size() > 0)
                       errs() << "Error: Call functions found in the function: " << *I << "\n";

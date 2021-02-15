@@ -9,6 +9,9 @@ import os, fnmatch, datetime, sys, re, glob
 import helper as helper
 
 top = sys.argv[1]
+if top == "-":
+	helper.error("Please specify the name of the benchmark. e.g.\nmake name=vecTrans")
+	assert(0)
 
 buff = []
 ftemp=helper.fileOpen("../env.tcl")
