@@ -39,24 +39,24 @@ make build
 ## Try IIProver
 
 Enter the Docker container if you are using Docker:
-```
+```shell
 make shell
 ```
 
 To prove a given II works for a loop, run `iiprover`:
-```
+```shell
 cd examples/top
 iiprover top
 ```
 
 To automatically find the optimal II for a loop, run `iifinder`:
-```
+```shell
 cd examples/top
 iifinder top
 ```
 
 To verify the results using co-simulation in Vitis HLS, run `vhls-cosim`:
-```
+```shell
 cd examples/top
 vhls-cosim top
 ```
