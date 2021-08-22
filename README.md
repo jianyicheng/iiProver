@@ -43,7 +43,7 @@ Enter the Docker container if you are using Docker:
 make shell
 ```
 
-To prove a given II works for a loop, run `iiprover`:
+Let's take `examples/top` for example. To prove a given II works for a loop, run `iiprover`:
 ```shell
 cd examples/top
 iiprover top
