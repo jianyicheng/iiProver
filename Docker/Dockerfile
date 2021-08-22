@@ -55,7 +55,7 @@ ENV vhls $VHLS_PATH
 RUN echo "source ${vhls}/Vitis_HLS/2020.2/settings64.sh" >> /home/dev-user/.bashrc
 RUN echo 'source /workspace/scripts/setup-vitis-hls-llvm.sh' >> /home/dev-user/.bashrc
 # PATH
-RUN echo 'export PATH=$PATH:/workspace/llvm/build/bin:/home/dev-user/.dotnet/tools' >> /home/dev-user/.bashrc
+RUN echo 'export PATH=$PATH:/workspace/bin:/workspace/llvm/build/bin:/home/dev-user/.dotnet/tools' >> /home/dev-user/.bashrc
 # Thread setup
 RUN echo 'export nproc=$(grep -c ^processor /proc/cpuinfo)' >> /home/dev-user/.bashrc
 
