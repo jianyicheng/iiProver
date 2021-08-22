@@ -1,0 +1,8 @@
+#!/bin/bash
+
+. env.tcl
+
+$NAME=$1
+
+g++ ${NAME}/src/*.c* || (echo "Error: syntax check failed."; exit 3)
+rm a.out

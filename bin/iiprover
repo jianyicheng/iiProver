@@ -1,0 +1,17 @@
+#!/bin/bash
+
+. env.tcl
+
+$NAME=$1
+
+preprocess ${NAME}
+
+python3 ${IIP}/scripts/tclGen.py ${NAME} || (echo "Error: generate synthesis script failed."; exit 3)
+
+vitis_hls syn.tcl || (echo "Error: Vitis HLS synthesis failed."; exit 3)
+	
+${OPT} -load ${IIP}/src/build/boogieGen/libboogieGen.so -boogieGen ${NAME}/proj/soluion1/.autopilot/db/a.o.3.bc -S > /dev/null  || (echo "Error: Boogie gen failed."; exit 3)   
+
+boogie ${NAME}/output.bpl
+
+rm ${NAME}/syn.tcl ${NAME}/cosim.tcl ${NAME}/output.bpl
