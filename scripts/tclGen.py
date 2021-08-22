@@ -1,5 +1,5 @@
 # ====================================================
-# II prover for Vitis HLS v1.0
+# II Prover for Vitis HLS v1.0
 #
 # Written by Jianyi Cheng
 # ====================================================

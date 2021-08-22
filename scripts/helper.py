@@ -1,5 +1,5 @@
 # ====================================================
-# Dynamic & Static Scheduling v1.0
+# II Prover for Vitis HLS v1.0
 #
 # Some helper functions for the parsers
 #
