@@ -1,0 +1,11 @@
+#!/bin/bash
+
+. env.tcl
+
+$NAME=$1
+MIN_II==${$2:-1}
+MAX_II==${$3:-100}
+
+preprocess ${NAME}
+
+python ${IIP}/scripts/iiProver.py ${NAME} ${MAX_II} ${MIN_II} - 2>&1 | tee iiProver.log || (echo "Error: iiFinder check failed."; exit 3)
