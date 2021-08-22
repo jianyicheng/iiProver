@@ -36,8 +36,8 @@ RUN cd /dkrPkgs \
     && make install
 
 # Boogie
-sudo dnf install -y dotnet
-dotnet tool install --global boogie
+RUN dnf install -y dotnet
+RUN dotnet tool install --global boogie
 
 CMD ["bash"]
 
